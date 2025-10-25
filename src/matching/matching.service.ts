@@ -36,124 +36,57 @@ export class MatchingService {
 
   matchBookingsWithClaims(matchRequestDto: MatchRequestDto): MatchResponseDto[] {
     const { bookings, claims } = matchRequestDto;
-    const matches: MatchResponseDto[] = [];
-    const usedClaims = new Set<string>();
-    const usedBookings = new Set<string>();
-
-    // Для кожного бронювання знаходимо найкращий claim
+    
+    // Крок 1: Знаходимо ВСІ можливі пари (booking, claim) з їх scores
+    const allCandidates: MatchCandidate[] = [];
+    
     for (const booking of bookings) {
-      const candidates = this.findMatchCandidates(booking, claims, usedClaims);
-
-      if (candidates.length > 0) {
-        // Вибираємо кандидата з найвищим score
-        candidates.sort((a, b) => b.score - a.score);
-        const bestMatch = candidates[0];
-
-        // Перевіряємо, чи не використовується вже цей claim іншим booking з вищим score
-        if (!usedClaims.has(bestMatch.claim.id)) {
-          usedClaims.add(bestMatch.claim.id);
-          usedBookings.add(booking.id);
-
-          const match: MatchResponseDto = {
-            claim: bestMatch.claim.id,
-            booking: booking.id,
-          };
-
-          if (bestMatch.mismatches.length > 0) {
-            match.mismatch = bestMatch.mismatches;
-          }
-
-          matches.push(match);
+      for (const claim of claims) {
+        const matchResult = this.calculateMatch(booking, claim);
+        if (matchResult.score > 0) {
+          allCandidates.push({
+            booking,
+            claim,
+            score: matchResult.score,
+            mismatches: matchResult.mismatches,
+          });
         }
       }
     }
 
-    // Другий прохід: для claims, які не були matched, шукаємо найкращі bookings
-    for (const claim of claims) {
-      if (!usedClaims.has(claim.id)) {
-        const candidates = this.findMatchCandidatesForClaim(
-          claim,
-          bookings,
-          usedBookings,
-        );
+    // Крок 2: Сортуємо всі пари за score (від найвищого до найнижчого)
+    allCandidates.sort((a, b) => b.score - a.score);
 
-        if (candidates.length > 0) {
-          candidates.sort((a, b) => b.score - a.score);
-          const bestMatch = candidates[0];
+    // Крок 3: Жадібно вибираємо найкращі пари, уникаючи конфліктів
+    const matches: MatchResponseDto[] = [];
+    const usedClaims = new Set<string>();
+    const usedBookings = new Set<string>();
 
-          if (!usedBookings.has(bestMatch.booking.id)) {
-            usedClaims.add(claim.id);
-            usedBookings.add(bestMatch.booking.id);
+    for (const candidate of allCandidates) {
+      // Перевіряємо, чи вже використані booking або claim
+      if (
+        !usedBookings.has(candidate.booking.id) &&
+        !usedClaims.has(candidate.claim.id)
+      ) {
+        usedBookings.add(candidate.booking.id);
+        usedClaims.add(candidate.claim.id);
 
-            const match: MatchResponseDto = {
-              claim: claim.id,
-              booking: bestMatch.booking.id,
-            };
+        const match: MatchResponseDto = {
+          claim: candidate.claim.id,
+          booking: candidate.booking.id,
+        };
 
-            if (bestMatch.mismatches.length > 0) {
-              match.mismatch = bestMatch.mismatches;
-            }
-
-            matches.push(match);
-          }
+        if (candidate.mismatches.length > 0) {
+          match.mismatch = candidate.mismatches;
         }
+
+        matches.push(match);
       }
     }
 
     return matches;
   }
 
-  private findMatchCandidates(
-    booking: BookingDto,
-    claims: ClaimDto[],
-    usedClaims: Set<string>,
-  ): MatchCandidate[] {
-    const candidates: MatchCandidate[] = [];
-
-    for (const claim of claims) {
-      if (usedClaims.has(claim.id)) {
-        continue;
-      }
-
-      const matchResult = this.calculateMatch(booking, claim);
-      if (matchResult.score > 0) {
-        candidates.push({
-          booking,
-          claim,
-          score: matchResult.score,
-          mismatches: matchResult.mismatches,
-        });
-      }
-    }
-
-    return candidates;
-  }
-
-  private findMatchCandidatesForClaim(
-    claim: ClaimDto,
-    bookings: BookingDto[],
-    usedBookings: Set<string>,
-  ): MatchCandidate[] {
-    const candidates: MatchCandidate[] = [];
-
-    for (const booking of bookings) {
-      if (usedBookings.has(booking.id)) {
-        continue;
-      }
-
-      const matchResult = this.calculateMatch(booking, claim);
-      if (matchResult.score > 0) {
-        candidates.push({
-          booking,
-          claim,
-          score: matchResult.score,
-          mismatches: matchResult.mismatches,
-        });
-      }
-    }
-
-    return candidates;
-  }
 
   private calculateMatch(
     booking: BookingDto,
